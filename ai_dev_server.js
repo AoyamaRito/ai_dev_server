@@ -54,7 +54,33 @@ function killProcessOnPort(port) {
   return true;
 }
 
+let lastError = { message: '', time: 0, count: 0 };
+const DEDUP_WINDOW_MS = 5000; // 5秒以内の同一エラーは集約
+
 function logError(entry) {
+  const now = Date.now();
+  const key = `${entry.type}:${entry.message}`;
+
+  // 同一エラーが5秒以内に再発 → カウントのみ
+  if (lastError.message === key && (now - lastError.time) < DEDUP_WINDOW_MS) {
+    lastError.count++;
+    lastError.time = now;
+    return; // ログ書き込みスキップ
+  }
+
+  // 前の重複エラーがあれば書き出し
+  if (lastError.count > 0) {
+    const dupLine = JSON.stringify({
+      timestamp: new Date(lastError.time).toISOString(),
+      type: 'repeated',
+      message: `Previous error repeated ${lastError.count} more times`
+    }) + '\n';
+    fs.appendFileSync(LOG_FILE, dupLine);
+    console.error(`[repeated] Previous error x${lastError.count}`);
+  }
+
+  // 新規エラー記録
+  lastError = { message: key, time: now, count: 0 };
   const timestamp = new Date().toISOString();
   const line = JSON.stringify({ timestamp, ...entry }) + '\n';
   fs.appendFileSync(LOG_FILE, line);
