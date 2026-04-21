@@ -533,13 +533,21 @@ BROWSER SNIPPET (paste in your HTML):
   })();
   </script>
 
+FOR AI CODERS (token-efficient):
+  tail -1 error.log                  # Last error (1 line, minimal tokens)
+  tail -5 error.log                  # Last 5 errors
+  ls snapshots/                      # List snapshots
+  head snapshots/snapshot_*.html     # View snapshot
+
+FOR HUMANS (full JSON):
+  curl localhost:3000/log            # All errors as JSON array
+  curl localhost:3000/snapshots      # Snapshots with metadata
+
 EXAMPLES:
   node ai_dev_server.js              # Start server on port 3000
   PORT=8080 node ai_dev_server.js    # Start on port 8080
   node ai_dev_server.js --kill       # Kill existing & start
   node ai_dev_server.js --test       # Run E2E tests
-  curl localhost:3000/log            # Get errors (AI coder reads this)
-  curl localhost:3000/snapshots      # List snapshots
 `);
 }
 
