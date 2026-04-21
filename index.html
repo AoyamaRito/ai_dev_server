@@ -164,6 +164,17 @@
       window.takeSnapshot = function(label) {
         sendSnapshot(label || 'Manual snapshot');
       };
+
+      // E2Eからのリクエストをポーリング
+      setInterval(async () => {
+        try {
+          const res = await fetch(SERVER + '/snapshot/pending');
+          const data = await res.json();
+          if (data.pending) {
+            sendSnapshot(data.label);
+          }
+        } catch (e) {}
+      }, 500);
     })();
   </script>
 

@@ -56,6 +56,7 @@ function killProcessOnPort(port) {
 
 let lastError = { message: '', time: 0, count: 0 };
 const DEDUP_WINDOW_MS = 5000; // 5秒以内の同一エラーは集約
+let snapshotRequest = null; // { label, resolve }
 
 function logError(entry) {
   const now = Date.now();
@@ -148,6 +149,7 @@ function handleSnapshotPost(req, res) {
 
       fs.writeFileSync(filepath, html);
       console.error(`[${timestamp}] snapshot: Saved ${filename}`);
+      completeSnapshotRequest(filename);
 
       // Also log the snapshot event
       logError({
@@ -222,6 +224,48 @@ function handleStatusGet(req, res) {
   }, null, 2));
 }
 
+// POST /snapshot/request?label=xxx - E2Eからスナップショット要求
+function handleSnapshotRequest(req, res) {
+  const url = new URL(req.url, `http://localhost`);
+  const label = url.searchParams.get('label') || 'requested';
+
+  // 5秒タイムアウト
+  const timeout = setTimeout(() => {
+    if (snapshotRequest) {
+      snapshotRequest = null;
+      res.writeHead(408);
+      res.end('{"ok":false,"error":"timeout"}');
+    }
+  }, 5000);
+
+  snapshotRequest = {
+    label,
+    resolve: (file) => {
+      clearTimeout(timeout);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, file }));
+    }
+  };
+}
+
+// GET /snapshot/pending - ブラウザがポーリング
+function handleSnapshotPending(req, res) {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  if (snapshotRequest) {
+    res.end(JSON.stringify({ pending: true, label: snapshotRequest.label }));
+  } else {
+    res.end('{"pending":false}');
+  }
+}
+
+// スナップショット完了時にresolve呼ぶ
+function completeSnapshotRequest(filename) {
+  if (snapshotRequest && snapshotRequest.resolve) {
+    snapshotRequest.resolve(filename);
+    snapshotRequest = null;
+  }
+}
+
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
@@ -258,6 +302,10 @@ const server = http.createServer((req, res) => {
     handleLogClear(req, res);
   } else if (req.method === 'GET' && urlPath === '/status') {
     handleStatusGet(req, res);
+  } else if (req.method === 'POST' && urlPath === '/snapshot/request') {
+    handleSnapshotRequest(req, res);
+  } else if (req.method === 'GET' && urlPath === '/snapshot/pending') {
+    handleSnapshotPending(req, res);
   } else if (req.method === 'GET') {
     serveStatic(req, res);
   } else {
@@ -538,13 +586,15 @@ ENVIRONMENT:
   SNAPSHOT_DIR  Snapshot directory (default: ./snapshots)
 
 ENDPOINTS:
-  POST /error      Log browser error (JSON body)
-  POST /snapshot   Save HTML snapshot (JSON: html, styles, error, url)
-  GET  /log        Get all logged errors
-  DELETE /log      Clear error log
-  GET  /snapshots  List saved snapshots
+  POST /error            Log browser error (JSON body)
+  POST /snapshot         Save HTML snapshot (JSON: html, styles, error, url)
+  POST /snapshot/request E2E: Request snapshot, wait for browser (5s timeout)
+  GET  /snapshot/pending Browser polls this for pending requests
+  GET  /log              Get all logged errors
+  DELETE /log            Clear error log
+  GET  /snapshots        List saved snapshots
   GET  /snapshots/:file  View snapshot
-  GET  /status     Server status
+  GET  /status           Server status
 
 BROWSER SNIPPET (paste in your HTML):
   <script>
@@ -574,6 +624,10 @@ EXAMPLES:
   PORT=8080 node ai_dev_server.js    # Start on port 8080
   node ai_dev_server.js --kill       # Kill existing & start
   node ai_dev_server.js --test       # Run E2E tests
+
+E2E SNAPSHOT (from test code):
+  curl -X POST 'localhost:3000/snapshot/request?label=after_login'
+  # Blocks until browser takes snapshot (5s timeout)
 `);
 }
 
