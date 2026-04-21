@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-//@ order = $SERVER01, $CLIENT01
+//@ order = $1D04407FA, $166FC3643, $E2E0TEST1, $MAIN00001
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -290,7 +290,6 @@ function tryListen(port, attempt = 1) {
   });
 }
 
-tryListen(BASE_PORT);
 //}
 
 //{ 02:ClientSnippet @mid #docs $166FC3643
@@ -339,4 +338,164 @@ tryListen(BASE_PORT);
  * })();
  * </script>
  */
+//}
+
+//{ 03:E2ETest @mid #test $E2E0TEST1
+const { spawn } = require('child_process');
+
+const TEST_PORT = 3099;
+const TEST_LOG = 'test_error.log';
+const TEST_SNAPSHOTS = './test_snapshots';
+
+function testFetch(urlPath, options = {}) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlPath, `http://localhost:${TEST_PORT}`);
+    const req = http.request(url, {
+      method: options.method || 'GET',
+      headers: options.headers || {}
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve({ status: res.statusCode, data, headers: res.headers }));
+    });
+    req.on('error', reject);
+    if (options.body) req.write(options.body);
+    req.end();
+  });
+}
+
+function testCleanup() {
+  if (fs.existsSync(TEST_LOG)) fs.unlinkSync(TEST_LOG);
+  if (fs.existsSync(TEST_SNAPSHOTS)) {
+    fs.readdirSync(TEST_SNAPSHOTS).forEach(f => fs.unlinkSync(path.join(TEST_SNAPSHOTS, f)));
+    fs.rmdirSync(TEST_SNAPSHOTS);
+  }
+}
+
+async function runE2ETests() {
+  console.log('=== ai_dev_server E2E Test ===\n');
+  testCleanup();
+
+  let passed = 0, failed = 0;
+  const assert = (cond, msg) => {
+    if (cond) { passed++; console.log(`  ✓ ${msg}`); }
+    else { failed++; console.log(`  ✗ ${msg}`); }
+  };
+
+  // Start test server
+  console.log('Starting test server...');
+  const serverProc = spawn(process.execPath, [__filename], {
+    env: { ...process.env, PORT: TEST_PORT, LOG_FILE: TEST_LOG, SNAPSHOT_DIR: TEST_SNAPSHOTS },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Server start timeout')), 5000);
+    serverProc.stdout.on('data', (d) => {
+      if (d.toString().includes('ai-dev-server running')) { clearTimeout(timeout); resolve(); }
+    });
+    serverProc.on('error', reject);
+  });
+  console.log(`Server started on port ${TEST_PORT}\n`);
+
+  try {
+    // GET /status
+    console.log('[Test: GET /status]');
+    let res = await testFetch('/status');
+    assert(res.status === 200, 'Status 200');
+    let data = JSON.parse(res.data);
+    assert(data.ok === true, 'ok: true');
+    assert(data.port === TEST_PORT, `port: ${TEST_PORT}`);
+
+    // POST /error
+    console.log('\n[Test: POST /error]');
+    res = await testFetch('/error', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'test', message: 'E2E test error' })
+    });
+    assert(res.status === 200, 'Status 200');
+    assert(JSON.parse(res.data).ok === true, 'ok: true');
+
+    // GET /log
+    console.log('\n[Test: GET /log]');
+    res = await testFetch('/log');
+    assert(res.status === 200, 'Status 200');
+    data = JSON.parse(res.data);
+    assert(Array.isArray(data) && data.length > 0, 'Has entries');
+    assert(data.some(e => e.message === 'E2E test error'), 'Contains test error');
+
+    // POST /snapshot
+    console.log('\n[Test: POST /snapshot]');
+    res = await testFetch('/snapshot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ html: '<div>E2E Test</div>', styles: '.t{color:red}', error: 'Test error', url: 'http://test/' })
+    });
+    assert(res.status === 200, 'Status 200');
+    data = JSON.parse(res.data);
+    assert(data.ok && data.file.endsWith('.html'), 'Returns filename');
+
+    // GET /snapshots
+    console.log('\n[Test: GET /snapshots]');
+    res = await testFetch('/snapshots');
+    assert(res.status === 200, 'Status 200');
+    data = JSON.parse(res.data);
+    assert(Array.isArray(data) && data.length > 0, 'Has snapshots');
+
+    // GET /snapshots/:file
+    console.log('\n[Test: GET /snapshots/:file]');
+    res = await testFetch(data[0].path);
+    assert(res.status === 200, 'Status 200');
+    assert(res.data.includes('E2E Test'), 'Contains content');
+
+    // Static serving
+    console.log('\n[Test: Static serving]');
+    res = await testFetch('/');
+    assert(res.status === 200, 'Status 200');
+
+    // CORS
+    console.log('\n[Test: CORS]');
+    res = await testFetch('/status', { method: 'OPTIONS' });
+    assert(res.headers['access-control-allow-origin'] === '*', 'Allow-Origin: *');
+
+    // Invalid JSON
+    console.log('\n[Test: Invalid JSON]');
+    res = await testFetch('/error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: 'bad' });
+    assert(res.status === 400, 'Status 400');
+
+    // 404
+    console.log('\n[Test: 404]');
+    res = await testFetch('/nonexistent.xyz');
+    assert(res.status === 404, 'Status 404');
+
+    // DELETE /log
+    console.log('\n[Test: DELETE /log]');
+    res = await testFetch('/log', { method: 'DELETE' });
+    assert(res.status === 200, 'Status 200');
+    res = await testFetch('/log');
+    assert(JSON.parse(res.data).length === 0, 'Log cleared');
+
+  } catch (e) {
+    console.error('\nTest error:', e.message);
+    failed++;
+  }
+
+  console.log('\n=== Results ===');
+  console.log(`Passed: ${passed}`);
+  console.log(`Failed: ${failed}`);
+
+  serverProc.kill();
+  await new Promise(r => setTimeout(r, 300));
+  testCleanup();
+  process.exit(failed > 0 ? 1 : 0);
+}
+//}
+
+//{ 04:Main @high #entry $MAIN00001
+if (process.argv.includes('--test')) {
+  runE2ETests();
+} else {
+  tryListen(BASE_PORT);
+}
 //}
