@@ -1,0 +1,5 @@
+node_modules/
+*.log
+snapshots/
+test_snapshots/
+test_error.log

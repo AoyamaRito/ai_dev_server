@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Click Game - ai_dev_server test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+    }
+    h1 { margin-bottom: 10px; }
+    .stats {
+      display: flex;
+      gap: 30px;
+      margin: 20px 0;
+      font-size: 1.2em;
+    }
+    .stats span { color: #0ff; }
+    #game-area {
+      width: 400px;
+      height: 400px;
+      background: #16213e;
+      border-radius: 10px;
+      position: relative;
+      overflow: hidden;
+      cursor: crosshair;
+    }
+    .target {
+      position: absolute;
+      width: 50px;
+      height: 50px;
+      background: #e94560;
+      border-radius: 50%;
+      cursor: pointer;
+      transition: transform 0.1s;
+    }
+    .target:hover { transform: scale(1.1); }
+    .target.hit {
+      background: #0f0;
+      animation: pop 0.2s ease-out forwards;
+    }
+    @keyframes pop {
+      to { transform: scale(0); opacity: 0; }
+    }
+    button {
+      margin-top: 20px;
+      padding: 10px 30px;
+      font-size: 1.1em;
+      background: #e94560;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    button:hover { background: #ff6b6b; }
+    #log {
+      margin-top: 20px;
+      padding: 10px;
+      background: #0d0d1a;
+      border-radius: 5px;
+      font-family: monospace;
+      font-size: 0.85em;
+      max-height: 150px;
+      overflow-y: auto;
+      width: 400px;
+    }
+    .log-entry { margin: 2px 0; color: #888; }
+    .log-entry.error { color: #f66; }
+  </style>
+</head>
+<body>
+  <h1>🎯 Click Game</h1>
+  <div class="stats">
+    <div>Score: <span id="score">0</span></div>
+    <div>Time: <span id="time">30</span>s</div>
+    <div>Missed: <span id="missed">0</span></div>
+  </div>
+  <div id="game-area"></div>
+  <button id="start-btn">Start Game</button>
+  <div id="log"></div>
+
+  <!-- Error Logger (ai_dev_server用) -->
+  <script>
+    (function() {
+      const SERVER = 'http://localhost:3000';
+
+      function sendError(entry) {
+        fetch(SERVER + '/error', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(entry)
+        }).catch(() => {});
+      }
+
+      function sendSnapshot(errorMsg) {
+        // Collect all styles
+        let styles = '';
+        for (const sheet of document.styleSheets) {
+          try {
+            for (const rule of sheet.cssRules) {
+              styles += rule.cssText + '\n';
+            }
+          } catch (e) { /* cross-origin stylesheets */ }
+        }
+
+        fetch(SERVER + '/snapshot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            html: document.body.innerHTML,
+            styles: styles,
+            error: errorMsg,
+            url: location.href,
+            timestamp: new Date().toISOString()
+          })
+        }).catch(() => {});
+      }
+
+      window.onerror = function(msg, src, line, col, err) {
+        sendError({
+          type: 'error',
+          message: msg,
+          source: src,
+          line: line,
+          column: col,
+          stack: err?.stack || ''
+        });
+        sendSnapshot(msg);
+      };
+
+      window.onunhandledrejection = function(e) {
+        const msg = e.reason?.message || String(e.reason);
+        sendError({
+          type: 'unhandledrejection',
+          message: msg,
+          stack: e.reason?.stack || ''
+        });
+        sendSnapshot('Promise: ' + msg);
+      };
+
+      const origConsoleError = console.error;
+      console.error = function(...args) {
+        sendError({
+          type: 'console.error',
+          message: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')
+        });
+        origConsoleError.apply(console, args);
+      };
+
+      // ゲームイベントもログ
+      window.logGame = function(msg) {
+        sendError({ type: 'game', message: msg });
+      };
+
+      // 手動スナップショット
+      window.takeSnapshot = function(label) {
+        sendSnapshot(label || 'Manual snapshot');
+      };
+    })();
+  </script>
+
+  <!-- Game Logic -->
+  <script>
+    const gameArea = document.getElementById('game-area');
+    const scoreEl = document.getElementById('score');
+    const timeEl = document.getElementById('time');
+    const missedEl = document.getElementById('missed');
+    const startBtn = document.getElementById('start-btn');
+    const logEl = document.getElementById('log');
+
+    let score = 0;
+    let missed = 0;
+    let timeLeft = 30;
+    let gameRunning = false;
+    let timerInterval;
+    let spawnInterval;
+
+    function log(msg, isError = false) {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry' + (isError ? ' error' : '');
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function spawnTarget() {
+      if (!gameRunning) return;
+
+      const target = document.createElement('div');
+      target.className = 'target';
+
+      const maxX = gameArea.clientWidth - 50;
+      const maxY = gameArea.clientHeight - 50;
+      target.style.left = Math.random() * maxX + 'px';
+      target.style.top = Math.random() * maxY + 'px';
+
+      target.onclick = () => {
+        if (!gameRunning) return;
+        target.classList.add('hit');
+        score++;
+        scoreEl.textContent = score;
+        log(`Hit! Score: ${score}`);
+        setTimeout(() => target.remove(), 200);
+      };
+
+      gameArea.appendChild(target);
+
+      // 2秒後に消える（クリックされなかった場合）
+      setTimeout(() => {
+        if (target.parentNode && !target.classList.contains('hit')) {
+          target.remove();
+          if (gameRunning) {
+            missed++;
+            missedEl.textContent = missed;
+            log(`Missed! Total missed: ${missed}`, true);
+
+            // 意図的なエラーテスト: 10回ミスでエラー
+            if (missed >= 10) {
+              console.error('Too many misses! Player struggling.');
+            }
+          }
+        }
+      }, 2000);
+    }
+
+    function startGame() {
+      score = 0;
+      missed = 0;
+      timeLeft = 30;
+      gameRunning = true;
+
+      scoreEl.textContent = '0';
+      missedEl.textContent = '0';
+      timeEl.textContent = '30';
+      gameArea.innerHTML = '';
+      startBtn.disabled = true;
+      startBtn.textContent = 'Playing...';
+
+      log('Game started!');
+      window.logGame('Game started');
+
+      timerInterval = setInterval(() => {
+        timeLeft--;
+        timeEl.textContent = timeLeft;
+
+        if (timeLeft <= 0) {
+          endGame();
+        }
+      }, 1000);
+
+      spawnInterval = setInterval(spawnTarget, 800);
+      spawnTarget();
+    }
+
+    function endGame() {
+      gameRunning = false;
+      clearInterval(timerInterval);
+      clearInterval(spawnInterval);
+      gameArea.innerHTML = '';
+
+      startBtn.disabled = false;
+      startBtn.textContent = 'Play Again';
+
+      const msg = `Game Over! Score: ${score}, Missed: ${missed}`;
+      log(msg);
+      window.logGame(msg);
+
+      // スコアに応じたメッセージ
+      if (score >= 25) {
+        log('🏆 Excellent!');
+      } else if (score >= 15) {
+        log('👍 Good job!');
+      } else {
+        log('💪 Keep practicing!');
+      }
+    }
+
+    startBtn.onclick = startGame;
+
+    // 意図的なエラーを起こすテストボタン（開発用）
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'e') {
+        // 'e'キーでエラーを発生させる
+        throw new Error('Test error triggered by pressing E key');
+      }
+      if (e.key === 'p') {
+        // 'p'キーでPromiseエラー
+        Promise.reject(new Error('Test promise rejection'));
+      }
+    });
+
+    log('Ready! Press Start to play.');
+    log('Press E for test error, P for promise rejection', true);
+  </script>
+</body>
+</html>
