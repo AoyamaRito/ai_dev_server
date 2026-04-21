@@ -493,7 +493,59 @@ async function runE2ETests() {
 //}
 
 //{ 04:Main @high #entry $MAIN00001
-if (process.argv.includes('--test')) {
+function showHelp() {
+  console.log(`
+ai-dev-server v0.3.0 - Zero-dependency dev server for AI coders
+
+USAGE:
+  node ai_dev_server.js [OPTIONS]
+
+OPTIONS:
+  --help     Show this help
+  --test     Run E2E tests (20 tests)
+  --kill     Kill existing process on port before starting
+
+ENVIRONMENT:
+  PORT          Server port (default: 3000)
+  LOG_FILE      Error log path (default: error.log)
+  STATIC_DIR    Static files directory (default: .)
+  SNAPSHOT_DIR  Snapshot directory (default: ./snapshots)
+
+ENDPOINTS:
+  POST /error      Log browser error (JSON body)
+  POST /snapshot   Save HTML snapshot (JSON: html, styles, error, url)
+  GET  /log        Get all logged errors
+  DELETE /log      Clear error log
+  GET  /snapshots  List saved snapshots
+  GET  /snapshots/:file  View snapshot
+  GET  /status     Server status
+
+BROWSER SNIPPET (paste in your HTML):
+  <script>
+  (function(){
+    const S='http://localhost:3000';
+    window.onerror=(m,s,l,c,e)=>{
+      fetch(S+'/error',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({type:'error',message:m,source:s,line:l,column:c,stack:e?.stack||''})});
+      fetch(S+'/snapshot',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({html:document.body.innerHTML,error:m,url:location.href})});
+    };
+  })();
+  </script>
+
+EXAMPLES:
+  node ai_dev_server.js              # Start server on port 3000
+  PORT=8080 node ai_dev_server.js    # Start on port 8080
+  node ai_dev_server.js --kill       # Kill existing & start
+  node ai_dev_server.js --test       # Run E2E tests
+  curl localhost:3000/log            # Get errors (AI coder reads this)
+  curl localhost:3000/snapshots      # List snapshots
+`);
+}
+
+if (process.argv.includes('--help') || process.argv.includes('-h')) {
+  showHelp();
+} else if (process.argv.includes('--test')) {
   runE2ETests();
 } else {
   tryListen(BASE_PORT);
