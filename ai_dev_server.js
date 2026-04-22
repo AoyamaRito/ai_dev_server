@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-//@ order = $1D04407FA, $166FC3643, $E2E0TEST1, $MAIN00001
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-//{ 01:Server @high #core $1D04407FA
+// [ai_s_emblem:#high#core Server]
 const { execSync } = require('child_process');
 
 const BASE_PORT = parseInt(process.env.PORT) || 3000;
@@ -363,10 +362,9 @@ function tryListen(port, attempt = 1) {
     }
   });
 }
+// [/ai_s_emblem: Server]
 
-//}
-
-//{ 02:ClientSnippet @mid #docs $166FC3643
+// [ai_s_emblem:#mid#docs ClientSnippet]
 /*
  * ブラウザ側に貼るコード (コピペ用)
  *
@@ -412,9 +410,9 @@ function tryListen(port, attempt = 1) {
  * })();
  * </script>
  */
-//}
+// [/ai_s_emblem: ClientSnippet]
 
-//{ 03:E2ETest @mid #test $E2E0TEST1
+// [ai_s_emblem:#mid#test E2ETest]
 const { spawn } = require('child_process');
 
 const TEST_PORT = 3099;
@@ -564,9 +562,9 @@ async function runE2ETests() {
   testCleanup();
   process.exit(failed > 0 ? 1 : 0);
 }
-//}
+// [/ai_s_emblem: E2ETest]
 
-//{ 04:Main @high #entry $MAIN00001
+// [ai_s_emblem:#high#entry Main]
 function showHelp() {
   console.log(`
 ai-dev-server v0.3.0 - Zero-dependency dev server for AI coders
@@ -638,4 +636,4 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 } else {
   tryListen(BASE_PORT);
 }
-//}
+// [/ai_s_emblem: Main]
